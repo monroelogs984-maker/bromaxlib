@@ -1,0 +1,13 @@
+[{
+    "modid": "bromaxlib",
+    "name": "BROMAX's Lib",
+    "description": "Player animation library for BROMAX's combat mods.",
+    "version": "${version}",
+    "mcversion": "${mcversion}",
+    "url": "",
+    "authorList": ["BROMAX"],
+    "credits": "",
+    "logoFile": "",
+    "screenshots": [],
+    "dependencies": []
+}]
