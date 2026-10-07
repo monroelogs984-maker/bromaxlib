@@ -7,9 +7,8 @@ public enum BoneTarget {
     LEFT_ARM,
     RIGHT_LEG,
     LEFT_LEG,
-    /** Weapon held in the main hand — read by MixinLayerHeldItem, not applied to model bones. */
+    /** Weapon held in the main hand — applied by MixinItemInHandLayer, not to model bones directly. */
     WEAPON_HAND;
 
-    /** Cached ordinal count — avoids allocating a new array on every BoneTarget.values() call. */
     public static final int COUNT = values().length;
 }

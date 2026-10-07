@@ -2,6 +2,7 @@ package com.bromax.bromaxlib.mixin;
 
 import com.bromax.bromaxlib.animation.AnimationController;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.model.ModelBase;
 import net.minecraft.client.model.ModelPlayer;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.EntityPlayer;
@@ -27,6 +28,18 @@ public abstract class MixinModelPlayer {
             float limbSwing, float limbSwingAmount, float ageInTicks,
             float netHeadYaw, float headPitch, float scaleFactor,
             Entity entityIn, CallbackInfo ci) {
+
+        // The engine's torso pass moves body/head/arm pivots that 1.12.2's setRotationAngles never
+        // resets (body x/y/z, head x/z, arm y), and the model is shared by every player: zero them
+        // each frame before anything else.
+        ModelPlayer model = (ModelPlayer) (Object) this;
+        model.bipedBody.rotationPointX = 0f; model.bipedBody.rotationPointY = 0f; model.bipedBody.rotationPointZ = 0f;
+        model.bipedHead.rotationPointX = 0f; model.bipedHead.rotationPointZ = 0f;
+        model.bipedRightArm.rotationPointY = 2f; model.bipedLeftArm.rotationPointY = 2f;
+        ModelBase.copyModelAngles(model.bipedBody, model.bipedBodyWear);
+        ModelBase.copyModelAngles(model.bipedHead, model.bipedHeadwear);
+        ModelBase.copyModelAngles(model.bipedRightArm, model.bipedRightArmwear);
+        ModelBase.copyModelAngles(model.bipedLeftArm, model.bipedLeftArmwear);
 
         if (!(entityIn instanceof EntityPlayer)) return;
         EntityPlayer player = (EntityPlayer) entityIn;

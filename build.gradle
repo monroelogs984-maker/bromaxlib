@@ -10,7 +10,7 @@ buildscript {
 
 apply plugin: 'net.minecraftforge.gradle'
 
-version = '1.0.0'
+version = '2.0.0'
 group = 'com.bromax.bromaxlib'
 archivesBaseName = 'bromaxlib'
 
@@ -30,7 +30,7 @@ minecraft {
 dependencies {
     minecraft 'net.minecraftforge:forge:1.12.2-14.23.5.2859'
     // Mixin is provided at runtime by MixinBooter — compile-only.
-    compileOnly files('/home/glenn/Documents/curseforge/minecraft/Instances/Sovereign 101/mods/!mixinbooter-10.7.jar')
+    compileOnly files('libs/mixinbooter-10.7.jar') // copy of the runtime MixinBooter (gitignored)
 }
 
 jar {
@@ -45,16 +45,6 @@ jar {
 
 jar.finalizedBy('reobfJar')
 
-task deploy {
-    doLast {
-        copy {
-            from 'build/libs/bromaxlib-1.0.0.jar'
-            into '/home/glenn/Documents/curseforge/minecraft/Instances/Sovereign 101/mods'
-        }
-        println "[DEPLOY] bromaxlib → S101"
-    }
-}
-build.finalizedBy(deploy)
 
 processResources {
     inputs.property 'version', project.version

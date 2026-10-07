@@ -8,44 +8,31 @@ import net.minecraft.util.ResourceLocation;
 import java.util.*;
 
 public class AnimationDefinition {
-    public final ResourceLocation id;
-    public final int duration;
-    public final Set<BoneTarget> blendMask;
-    public final int hitWindowStart;
-    public final int hitWindowEnd;
-    public final boolean hasTrail;
-    /** True if any keyframe in this animation has a non-zero tx, ty, or tz value.
-     *  Used to skip translation logic entirely for the common case of rotation-only animations. */
-    public final boolean hasTranslations;
-
-    /**
-     * Per-animation lunge intensity [0.0 – 1.0].
-     *
-     * At runtime this drives four additive effects scaled by this value:
-     *   1. Body forward lean (rx)
-     *   2. Arm dramatic push forward (rx)
-     *   3. Leg stride (right leg forward, left leg back)
-     *   4. A forward velocity impulse on the first game tick of the attack
-     *
-     * 0.0 = no lunge (wide sweeps, stationary slams)
-     * 0.10–0.15 = slight commitment step (greatsword, hammer)
-     * 0.25–0.35 = clear charge (dagger stab, longsword thrust)
-     * 0.35–0.50 = full aggressive lunge (rapier, spear)
-     */
-    public final float lunge;
+    public final ResourceLocation    id;
+    public final int                 duration;
+    public final Set<BoneTarget>     blendMask;
+    public final int                 hitWindowStart;
+    public final int                 hitWindowEnd;
+    public final boolean             hasTrail;
+    public final boolean             hasTranslations;
+    public final float               lunge;
+    public final WeaponGrip          grip;
+    public final float               gripScale;
 
     private final Map<BoneTarget, List<Keyframe>> keyframesByBone;
 
     public AnimationDefinition(ResourceLocation id, int duration, Set<BoneTarget> blendMask,
                                int hitWindowStart, int hitWindowEnd, boolean hasTrail,
-                               float lunge, List<Keyframe> keyframes) {
-        this.id = id;
-        this.duration = duration;
-        this.blendMask = Collections.unmodifiableSet(blendMask);
+                               float lunge, WeaponGrip grip, float gripScale, List<Keyframe> keyframes) {
+        this.id             = id;
+        this.duration       = duration;
+        this.blendMask      = Collections.unmodifiableSet(blendMask);
         this.hitWindowStart = hitWindowStart;
-        this.hitWindowEnd = hitWindowEnd;
-        this.hasTrail = hasTrail;
-        this.lunge = Math.max(0f, Math.min(1f, lunge));
+        this.hitWindowEnd   = hitWindowEnd;
+        this.hasTrail       = hasTrail;
+        this.lunge          = Math.max(0f, Math.min(1f, lunge));
+        this.grip           = grip != null ? grip : WeaponGrip.VANILLA;
+        this.gripScale      = Math.max(0f, Math.min(2f, gripScale));
 
         this.keyframesByBone = new EnumMap<>(BoneTarget.class);
         boolean anyTranslation = false;
@@ -59,37 +46,66 @@ public class AnimationDefinition {
         }
     }
 
+    /** Keyframes for one bone, in tick order (empty when the bone isn't animated). */
+    public List<Keyframe> keyframes(BoneTarget bone) {
+        List<Keyframe> frames = keyframesByBone.get(bone);
+        return frames == null ? Collections.emptyList() : Collections.unmodifiableList(frames);
+    }
+
+    /** Keyframe ticks for one bone, in order (empty when the bone isn't animated). */
+    public List<Integer> keyframeTicks(BoneTarget bone) {
+        List<Keyframe> frames = keyframesByBone.get(bone);
+        if (frames == null) return Collections.emptyList();
+        List<Integer> out = new ArrayList<>();
+        for (Keyframe kf : frames) out.add(kf.tick);
+        return out;
+    }
+
+    /** Share of the final pose eased off between the last keyframe and the end of the animation. */
+    private static final float SETTLE = 0.25f;
+
+    /**
+     * Most animations stop at their last keyframe and hold it for 15-40% of their length before
+     * the blend-out starts, which reads as the figure freezing after the hit. Past the last
+     * keyframe the pose now eases a little toward neutral so the recovery keeps moving.
+     */
+    private float settle(Keyframe last, float tick) {
+        float span = duration - last.tick;
+        if (span <= 0f) return 1f;
+        float t = Math.max(0f, Math.min(1f, (tick - last.tick) / span));
+        return 1f - SETTLE * t * t * (3f - 2f * t);
+    }
+
     public boolean isHitWindowActive(float tick) {
         return tick >= hitWindowStart && tick <= hitWindowEnd;
     }
 
-    /** Writes interpolated [rx, ry, rz] (radians) into {@code out}. Callers must pass a float[3]. */
+    /** Writes interpolated [rx, ry, rz] in radians into {@code out}. Pass a float[3]. */
     public void evaluate(BoneTarget bone, float tick, float[] out) {
-        // Clamp tick so malformed callers or rounding can't escape the keyframe range.
         if (!Float.isFinite(tick)) tick = 0f;
         else tick = Math.max(0f, Math.min(tick, duration));
 
         List<Keyframe> frames = keyframesByBone.get(bone);
         if (frames == null || frames.isEmpty()) { out[0] = out[1] = out[2] = 0f; return; }
 
-        Keyframe before = null;
-        Keyframe after  = null;
+        Keyframe before = null, after = null;
         for (Keyframe kf : frames) {
             if (kf.tick <= tick) before = kf;
             if (kf.tick >= tick && after == null) after = kf;
         }
 
-        if (before == null) { out[0] = after.rx; out[1] = after.ry; out[2] = after.rz; return; }
-        if (after == null || before == after) { out[0] = before.rx; out[1] = before.ry; out[2] = before.rz; return; }
+        if (before == null)               { out[0] = after.rx;  out[1] = after.ry;  out[2] = after.rz;  return; }
+        if (after == null) { float k = settle(before, tick); out[0] = before.rx * k; out[1] = before.ry * k; out[2] = before.rz * k; return; }
+        if (before == after) { out[0] = before.rx; out[1] = before.ry; out[2] = before.rz; return; }
 
         float t = (tick - before.tick) / (float)(after.tick - before.tick);
-        float easedT = before.easing.apply(t); // easing on a keyframe controls the curve LEAVING it
-        out[0] = lerp(before.rx, after.rx, easedT);
-        out[1] = lerp(before.ry, after.ry, easedT);
-        out[2] = lerp(before.rz, after.rz, easedT);
+        float e = before.easing.apply(t);
+        out[0] = lerp(before.rx, after.rx, e);
+        out[1] = lerp(before.ry, after.ry, e);
+        out[2] = lerp(before.rz, after.rz, e);
     }
 
-    /** Writes interpolated [tx, ty, tz] (model pixels) into {@code out}. Callers must pass a float[3]. */
+    /** Writes interpolated [tx, ty, tz] in model pixels into {@code out}. Pass a float[3]. */
     public void evaluateTranslation(BoneTarget bone, float tick, float[] out) {
         if (!Float.isFinite(tick)) tick = 0f;
         else tick = Math.max(0f, Math.min(tick, duration));
@@ -97,99 +113,84 @@ public class AnimationDefinition {
         List<Keyframe> frames = keyframesByBone.get(bone);
         if (frames == null || frames.isEmpty()) { out[0] = out[1] = out[2] = 0f; return; }
 
-        Keyframe before = null;
-        Keyframe after  = null;
+        Keyframe before = null, after = null;
         for (Keyframe kf : frames) {
             if (kf.tick <= tick) before = kf;
             if (kf.tick >= tick && after == null) after = kf;
         }
 
-        if (before == null) { out[0] = after.tx; out[1] = after.ty; out[2] = after.tz; return; }
-        if (after == null || before == after) { out[0] = before.tx; out[1] = before.ty; out[2] = before.tz; return; }
+        if (before == null)               { out[0] = after.tx;  out[1] = after.ty;  out[2] = after.tz;  return; }
+        if (after == null) { float k = settle(before, tick); out[0] = before.tx * k; out[1] = before.ty * k; out[2] = before.tz * k; return; }
+        if (before == after) { out[0] = before.tx; out[1] = before.ty; out[2] = before.tz; return; }
 
         float t = (tick - before.tick) / (float)(after.tick - before.tick);
-        float easedT = before.easing.apply(t);
-        out[0] = lerp(before.tx, after.tx, easedT);
-        out[1] = lerp(before.ty, after.ty, easedT);
-        out[2] = lerp(before.tz, after.tz, easedT);
+        float e = before.easing.apply(t);
+        out[0] = lerp(before.tx, after.tx, e);
+        out[1] = lerp(before.ty, after.ty, e);
+        out[2] = lerp(before.tz, after.tz, e);
     }
 
-    private static float lerp(float a, float b, float t) {
-        return a + (b - a) * t;
-    }
+    private static float lerp(float a, float b, float t) { return a + (b - a) * t; }
 
     public static AnimationDefinition fromJson(ResourceLocation id, JsonObject json) {
         if (!json.has("duration"))
-            throw new IllegalArgumentException("Missing required field 'duration'");
+            throw new IllegalArgumentException("Missing 'duration' in " + id);
         int duration = json.get("duration").getAsInt();
         if (duration <= 0)
-            throw new IllegalArgumentException("'duration' must be > 0, got " + duration);
+            throw new IllegalArgumentException("'duration' must be > 0 in " + id);
+
         boolean hasTrail = json.has("trail");
         float lunge = json.has("lunge") ? Math.max(0f, Math.min(1f, json.get("lunge").getAsFloat())) : 0f;
+        WeaponGrip grip = json.has("grip") ? WeaponGrip.fromString(json.get("grip").getAsString()) : WeaponGrip.VANILLA;
+        float gripScale = json.has("grip_scale") ? json.get("grip_scale").getAsFloat() : 1.0f;
 
         int hitStart = 0, hitEnd = 0;
         if (json.has("hit_window")) {
             JsonObject hw = json.getAsJsonObject("hit_window");
             hitStart = hw.get("start").getAsInt();
-            hitEnd = hw.get("end").getAsInt();
+            hitEnd   = hw.get("end").getAsInt();
         }
 
         Set<BoneTarget> blendMask;
         if (json.has("blend_mask")) {
             blendMask = EnumSet.noneOf(BoneTarget.class);
             for (JsonElement e : json.getAsJsonArray("blend_mask")) {
-                try {
-                    blendMask.add(BoneTarget.valueOf(e.getAsString().toUpperCase()));
-                } catch (IllegalArgumentException ex) {
-                    // Unknown bone name — skip rather than crash
-                }
+                try { blendMask.add(BoneTarget.valueOf(e.getAsString().toUpperCase())); }
+                catch (IllegalArgumentException ignored) {}
             }
             if (blendMask.isEmpty()) blendMask = EnumSet.of(BoneTarget.RIGHT_ARM);
         } else {
-            // Default to just the right arm — safe fallback that doesn't override
-            // head look direction or leg walk animation when full body is unintended.
             blendMask = EnumSet.of(BoneTarget.RIGHT_ARM);
         }
 
-        if (!json.has("keyframes")) {
+        if (!json.has("keyframes"))
             return new AnimationDefinition(id, duration, blendMask, hitStart, hitEnd, hasTrail,
-                    lunge, Collections.emptyList());
-        }
+                    lunge, grip, gripScale, Collections.emptyList());
 
         List<Keyframe> keyframes = new ArrayList<>();
-        JsonArray kfArray = json.getAsJsonArray("keyframes");
-        for (JsonElement kfElem : kfArray) {
+        for (JsonElement kfElem : json.getAsJsonArray("keyframes")) {
             try {
                 JsonObject kf = kfElem.getAsJsonObject();
-                int tick = kf.get("tick").getAsInt();
-                BoneTarget bone = BoneTarget.valueOf(kf.get("bone").getAsString().toUpperCase());
+                int        tick  = kf.get("tick").getAsInt();
+                BoneTarget bone  = BoneTarget.valueOf(kf.get("bone").getAsString().toUpperCase());
                 float rx = kf.has("rx") ? kf.get("rx").getAsFloat() : 0f;
                 float ry = kf.has("ry") ? kf.get("ry").getAsFloat() : 0f;
                 float rz = kf.has("rz") ? kf.get("rz").getAsFloat() : 0f;
-                // tx/ty/tz are model-pixel offsets — no unit conversion needed
                 float tx = kf.has("tx") ? kf.get("tx").getAsFloat() : 0f;
                 float ty = kf.has("ty") ? kf.get("ty").getAsFloat() : 0f;
                 float tz = kf.has("tz") ? kf.get("tz").getAsFloat() : 0f;
                 EasingFunction easing = EasingFunction.LINEAR;
                 if (kf.has("easing")) {
-                    try {
-                        easing = EasingFunction.valueOf(kf.get("easing").getAsString().toUpperCase());
-                    } catch (IllegalArgumentException ex) {
-                        // Unknown easing — fall back to LINEAR
-                    }
+                    try { easing = EasingFunction.valueOf(kf.get("easing").getAsString().toUpperCase()); }
+                    catch (IllegalArgumentException ignored) {}
                 }
-                // rx/ry/rz store degrees; convert to radians for ModelRenderer
+                // JSON stores degrees; convert to radians for ModelPart
                 keyframes.add(new Keyframe(tick, bone,
-                    (float) Math.toRadians(rx),
-                    (float) Math.toRadians(ry),
-                    (float) Math.toRadians(rz),
-                    tx, ty, tz,
-                    easing));
-            } catch (Exception ex) {
-                // Malformed keyframe — skip it, don't abort the whole animation
-            }
+                    (float) Math.toRadians(rx), (float) Math.toRadians(ry), (float) Math.toRadians(rz),
+                    tx, ty, tz, easing));
+            } catch (Exception ignored) {}
         }
 
-        return new AnimationDefinition(id, duration, blendMask, hitStart, hitEnd, hasTrail, lunge, keyframes);
+        return new AnimationDefinition(id, duration, blendMask, hitStart, hitEnd, hasTrail, lunge, grip, gripScale, keyframes);
     }
 }

@@ -21,7 +21,6 @@ public class BromaxLibCorePlugin implements IFMLLoadingPlugin, IEarlyMixinLoader
     public List<String> getMixinConfigs() {
         java.util.List<String> configs = new java.util.ArrayList<>();
         configs.add("bromaxlib.mixins.json");
-        configs.add("bromaxlib.optional.mixins.json");
         return configs;
     }
 
